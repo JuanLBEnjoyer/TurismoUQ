@@ -1,7 +1,7 @@
-# TurismoUQ- Bases de Datos II
+# Entrega 1 TurismoUQ- Bases de Datos II
 
 ## Objetivo
-Integrar una base de datos completa para administrar la oferta de alojamiento en el Quindio
+Construir el modelo relacional de la plataforma TurismoUQ e implementarlo en Oracle, incluyendo la definición de tablas y restricciones, la carga masiva de datos coherentes con PL/SQL y la verificación de la integridad del modelo.
 
 ## Integrantes
 - Juan Pablo Galeano Correa
