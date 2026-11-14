@@ -242,18 +242,23 @@ SELECT mu.nombre AS municipio,
 -- ancho: alta, media, baja); UNPIVOT las convierte en filas
 -- (tipo, temporada, tarifa_promedio).
 -- =====================================================================
-SELECT tipo_movimiento,
-       TO_CHAR(fecha_exacta, 'YYYY-MM') AS mes,
-       COUNT(*) AS total_operaciones
+SELECT tipo_alojamiento,
+       temporada,
+       tarifa_promedio
   FROM (
-        SELECT id_reserva, fecha_checkin, fecha_checkout
-          FROM reserva
+        SELECT ta.nombre AS tipo_alojamiento,
+               ROUND(AVG(CASE t.categoria WHEN 'ALTA'  THEN tf.valor_noche END), 0) AS alta,
+               ROUND(AVG(CASE t.categoria WHEN 'MEDIA' THEN tf.valor_noche END), 0) AS media,
+               ROUND(AVG(CASE t.categoria WHEN 'BAJA'  THEN tf.valor_noche END), 0) AS baja
+          FROM tarifa tf
+          JOIN habitacion h        ON h.id_habitacion = tf.id_habitacion
+          JOIN alojamiento a       ON a.id_alojamiento = h.id_alojamiento
+          JOIN tipo_alojamiento ta ON ta.id_tipo = a.id_tipo
+          JOIN temporada t         ON t.id_temporada = tf.id_temporada
+         GROUP BY ta.nombre
        )
-UNPIVOT (fecha_exacta FOR tipo_movimiento IN (
-         fecha_checkin AS 'CHECK-IN',
-         fecha_checkout AS 'CHECK-OUT'))
- GROUP BY tipo_movimiento, TO_CHAR(fecha_exacta, 'YYYY-MM')
- ORDER BY mes, tipo_movimiento;
+UNPIVOT (tarifa_promedio FOR temporada IN (alta AS 'ALTA', media AS 'MEDIA', baja AS 'BAJA'))
+ ORDER BY tipo_alojamiento, temporada;
 
 -- =====================================================================
 -- CONSULTA 7 (LIBRE). BRECHA ENTRE ESTRELLAS AUTOASIGNADAS Y RESENAS

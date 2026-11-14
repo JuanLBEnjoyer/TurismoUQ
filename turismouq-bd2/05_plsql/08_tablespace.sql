@@ -12,7 +12,10 @@ CREATE TABLESPACE ts_historico_reservas
     SEGMENT SPACE MANAGEMENT AUTO;
 
 -- Asignar cuota al usuario del esquema TurismoUQ 
-ALTER USER bd_proyecto QUOTA UNLIMITED ON ts_historico_reservas;
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER USER "' || USER || '" QUOTA UNLIMITED ON ts_historico_reservas';
+END;
+/
 
 -- =====================================================================
 -- 2. TABLA DE HISTÓRICO DE RESERVAS ALOJADA EN EL TABLESPACE DEDICADO
