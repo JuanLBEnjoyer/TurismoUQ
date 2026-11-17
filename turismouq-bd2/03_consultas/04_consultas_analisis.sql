@@ -15,18 +15,21 @@ SET VERIFY OFF
 -- Tecnica: PIVOT sobre el numero de mes -> una fila por municipio y una
 -- columna por mes. Para otro anio, cambiar DATE '2025-01-01' en CTE "meses".
 -- =====================================================================
+-- Paso 1: Generar los 12 rangos de fechas (inicio y fin) para cada mes del anio 2025 usando CONNECT BY.
 WITH meses AS (
   SELECT ADD_MONTHS(DATE '2025-01-01', LEVEL - 1) AS ini,
          ADD_MONTHS(DATE '2025-01-01', LEVEL)     AS fin
     FROM dual
- CONNECT BY LEVEL <= 12
+  CONNECT BY LEVEL <= 12
 ),
+-- Paso 2: Contar el total de habitaciones que tiene cada municipio.
 hab_mun AS (
   SELECT a.id_municipio, COUNT(*) AS habitaciones
     FROM habitacion h
     JOIN alojamiento a ON a.id_alojamiento = h.id_alojamiento
    GROUP BY a.id_municipio
 ),
+-- Paso 3: Calcular las noches reales ocupadas por municipio en cada mes (excluyendo canceladas).
 noches AS (
   SELECT a.id_municipio, m.ini,
          SUM(LEAST(rh.fecha_checkout, m.fin) - GREATEST(rh.fecha_checkin, m.ini)) AS noches_ocupadas
@@ -37,6 +40,7 @@ noches AS (
     JOIN alojamiento a  ON a.id_alojamiento = h.id_alojamiento
    GROUP BY a.id_municipio, m.ini
 )
+-- Paso 4: Unir todos los municipios con todos los meses y calcular el porcentaje de ocupacion.
 SELECT *
   FROM (
         SELECT mu.nombre AS municipio,
@@ -47,6 +51,7 @@ SELECT *
          CROSS JOIN meses m
           LEFT JOIN noches n ON n.id_municipio = mu.id_municipio AND n.ini = m.ini
        )
+ -- Paso 5: PIVOT para transformar los meses (1 a 12) en columnas (ene a dic).
  PIVOT (MAX(ocupacion_pct)
         FOR mes IN (1 AS ene, 2 AS feb, 3 AS mar, 4 AS abr, 5 AS may, 6 AS jun,
                     7 AS jul, 8 AS ago, 9 AS sep, 10 AS oct, 11 AS nov, 12 AS dic))
@@ -61,6 +66,7 @@ SELECT *
 -- (fila de subtotal), lo que permite distinguirla de un valor NULL real y
 -- rotularla como '** TODOS **'.
 -- =====================================================================
+-- Paso 1: Calcular el ingreso de cada reserva completada segun los dias en cada temporada y su tarifa.
 WITH ingreso_linea AS (
   SELECT a.id_municipio, a.id_tipo, t.categoria,
          (LEAST(rh.fecha_checkout, t.fecha_fin + 1)
@@ -75,6 +81,8 @@ WITH ingreso_linea AS (
                               AND tf.id_temporada  = t.id_temporada
    WHERE r.estado = 'COMPLETADA'
 )
+-- Paso 2: Agrupar con CUBE para obtener ingresos y subtotales por municipio, tipo y temporada.
+-- Con GROUPING() se identifican los totales para rotularlos como '** TODOS **' o '** TODAS **'.
 SELECT CASE GROUPING(mu.nombre) WHEN 1 THEN '** TODOS **' ELSE mu.nombre END AS municipio,
        CASE GROUPING(ta.nombre) WHEN 1 THEN '** TODOS **' ELSE ta.nombre END AS tipo_alojamiento,
        CASE GROUPING(il.categoria) WHEN 1 THEN '** TODAS **' ELSE il.categoria END AS temporada,
@@ -97,6 +105,7 @@ SELECT CASE GROUPING(mu.nombre) WHEN 1 THEN '** TODOS **' ELSE mu.nombre END AS 
 -- RANK deja huecos y repite puesto ante empates; los municipios con menos de
 -- 3 alojamientos con ingresos muestran los que tienen.
 -- =====================================================================
+-- Paso 1: Calcular el valor cobrado en cada habitacion reservada completada.
 WITH ingreso_linea AS (
   SELECT h.id_alojamiento,
          (LEAST(rh.fecha_checkout, t.fecha_fin + 1)
@@ -110,11 +119,13 @@ WITH ingreso_linea AS (
                               AND tf.id_temporada  = t.id_temporada
    WHERE r.estado = 'COMPLETADA'
 ),
+-- Paso 2: Sumar el ingreso total obtenido por cada alojamiento.
 ingreso_aloj AS (
   SELECT id_alojamiento, SUM(valor) AS ingreso
     FROM ingreso_linea
    GROUP BY id_alojamiento
 ),
+-- Paso 3: Asignar un puesto (RANK) a cada alojamiento ordenado por ingreso dentro de su municipio.
 ranking AS (
   SELECT mu.nombre AS municipio,
          a.nombre_comercial AS alojamiento,
@@ -126,6 +137,7 @@ ranking AS (
     JOIN municipio mu        ON mu.id_municipio = a.id_municipio
     JOIN tipo_alojamiento ta ON ta.id_tipo = a.id_tipo
 )
+-- Paso 4: Filtrar para mostrar unicamente el top 3 de alojamientos por municipio.
 SELECT municipio, puesto, alojamiento, tipo, ingreso
   FROM ranking
  WHERE puesto <= 3
@@ -139,6 +151,7 @@ SELECT municipio, puesto, alojamiento, tipo, ingreso
 -- del anio previo. El ingreso se reconoce en el mes del check-out (cuando la
 -- estadia se completa). La primera fila no tiene mes previo -> variacion NULL.
 -- =====================================================================
+-- Paso 1: Calcular el valor de cada reserva completada y truncar la fecha de check-out al primer dia del mes.
 WITH ingreso_reserva AS (
   SELECT r.id_reserva,
          TRUNC(r.fecha_checkout, 'MM') AS mes,
@@ -154,11 +167,13 @@ WITH ingreso_reserva AS (
      AND r.fecha_checkout < TO_DATE('2026-10-01', 'YYYY-MM-DD')
    GROUP BY r.id_reserva, TRUNC(r.fecha_checkout, 'MM')
 ),
+-- Paso 2: Totalizar el numero de reservas y el ingreso generado en cada mes.
 mensual AS (
   SELECT mes, COUNT(*) AS reservas, SUM(valor) AS ingreso
     FROM ingreso_reserva
    GROUP BY mes
 )
+-- Paso 3: Usar LAG() para comparar el ingreso con el mes anterior y con el mismo mes del anio anterior.
 SELECT TO_CHAR(mes, 'YYYY-MM') AS mes,
        reservas,
        ingreso,
@@ -180,6 +195,7 @@ SELECT TO_CHAR(mes, 'YYYY-MM') AS mes,
 -- (NULL = todos los municipios). Los valores se pasan por bind, no concatenados:
 -- el plan se reutiliza y se evita la inyeccion de SQL.
 -- =====================================================================
+-- Paso 1: Declarar y asignar valores a las variables de enlace (bind variables).
 VARIABLE v_desde     VARCHAR2(10)
 VARIABLE v_hasta     VARCHAR2(10)
 VARIABLE v_municipio VARCHAR2(60)
@@ -187,6 +203,7 @@ EXEC :v_desde := '2025-12-01'
 EXEC :v_hasta := '2026-01-31'
 EXEC :v_municipio := NULL
 
+-- Paso 2: Filtrar reservas no canceladas cuyo check-in este dentro del rango de fechas recibido.
 WITH rango AS (
   SELECT r.id_reserva, r.id_alojamiento
     FROM reserva r
@@ -194,12 +211,14 @@ WITH rango AS (
      AND r.fecha_checkin >= TO_DATE(:v_desde, 'YYYY-MM-DD')
      AND r.fecha_checkin <  TO_DATE(:v_hasta, 'YYYY-MM-DD') + 1
 ),
+-- Paso 3: Calcular el total de noches por cada reserva del rango.
 noches AS (
   SELECT rh.id_reserva, SUM(rh.fecha_checkout - rh.fecha_checkin) AS noches
     FROM reserva_habitacion rh
     JOIN rango rg ON rg.id_reserva = rh.id_reserva
    GROUP BY rh.id_reserva
 ),
+-- Paso 4: Calcular el valor del hospedaje aplicando tarifas segun temporada por reserva.
 hospedaje AS (
   SELECT rh.id_reserva,
          SUM((LEAST(rh.fecha_checkout, t.fecha_fin + 1)
@@ -210,12 +229,15 @@ hospedaje AS (
     JOIN tarifa tf   ON tf.id_habitacion = rh.id_habitacion AND tf.id_temporada = t.id_temporada
    GROUP BY rh.id_reserva
 ),
+-- Paso 5: Calcular el valor de servicios adicionales consumidos en cada reserva.
 servicios AS (
   SELECT rs.id_reserva, SUM(rs.cantidad * rs.precio_unitario) AS valor
     FROM reserva_servicio rs
     JOIN rango rg ON rg.id_reserva = rs.id_reserva
    GROUP BY rs.id_reserva
 )
+-- Paso 6: Unir los calculos, agrupar por alojamiento/municipio, 
+--aplicar filtro opcional de municipio y listar top 20.
 SELECT mu.nombre AS municipio,
        a.nombre_comercial AS alojamiento,
        COUNT(*) AS reservas,
@@ -235,31 +257,31 @@ SELECT mu.nombre AS municipio,
  FETCH FIRST 20 ROWS ONLY;
 
 -- =====================================================================
--- CONSULTA 6. UNPIVOT: TARIFA PROMEDIO POR TIPO DE ALOJAMIENTO Y TEMPORADA
--- Pregunta: cual es la tarifa promedio por noche de cada tipo de alojamiento
--- en temporada alta, media y baja? (formato "largo", listo para graficar)
--- Tecnica: la consulta interna produce una columna por categoria (formato
--- ancho: alta, media, baja); UNPIVOT las convierte en filas
--- (tipo, temporada, tarifa_promedio).
+-- CONSULTA 6. UNPIVOT: VOLUMEN DE MOVIMIENTOS (CHECK-IN VS CHECK-OUT)
+-- Pregunta: ¿Cuál es el volumen de operaciones de entrada (check-in) y 
+-- salida (check-out) que debe gestionar la plataforma mes a mes?
+-- Técnica: UNPIVOT sobre columnas nativas. Transforma las columnas 
+-- estáticas de la tabla RESERVA (fecha_checkin y fecha_checkout) en 
+-- filas, categorizándolas bajo la dimensión 'tipo_movimiento'.
 -- =====================================================================
-SELECT tipo_alojamiento,
-       temporada,
-       tarifa_promedio
+-- Paso 1: Consultar los movimientos desagrupados por tipo y mes, contando el total de operaciones.
+SELECT tipo_movimiento,
+       TO_CHAR(fecha_exacta, 'YYYY-MM') AS mes,
+       COUNT(*) AS total_operaciones
   FROM (
-        SELECT ta.nombre AS tipo_alojamiento,
-               ROUND(AVG(CASE t.categoria WHEN 'ALTA'  THEN tf.valor_noche END), 0) AS alta,
-               ROUND(AVG(CASE t.categoria WHEN 'MEDIA' THEN tf.valor_noche END), 0) AS media,
-               ROUND(AVG(CASE t.categoria WHEN 'BAJA'  THEN tf.valor_noche END), 0) AS baja
-          FROM tarifa tf
-          JOIN habitacion h        ON h.id_habitacion = tf.id_habitacion
-          JOIN alojamiento a       ON a.id_alojamiento = h.id_alojamiento
-          JOIN tipo_alojamiento ta ON ta.id_tipo = a.id_tipo
-          JOIN temporada t         ON t.id_temporada = tf.id_temporada
-         GROUP BY ta.nombre
+        -- Paso 1.1: Extraer el identificador de reserva y las dos columnas de fecha de interés.
+        SELECT id_reserva, fecha_checkin, fecha_checkout
+          FROM reserva
        )
-UNPIVOT (tarifa_promedio FOR temporada IN (alta AS 'ALTA', media AS 'MEDIA', baja AS 'BAJA'))
- ORDER BY tipo_alojamiento, temporada;
-
+-- Paso 2: UNPIVOT convierte las dos columnas de fecha (fecha_checkin y fecha_checkout) en filas,
+-- asignando el valor a 'fecha_exacta' y su etiqueta ('CHECK-IN' o 'CHECK-OUT') a 'tipo_movimiento'.
+UNPIVOT (fecha_exacta FOR tipo_movimiento IN (
+         fecha_checkin AS 'CHECK-IN',
+         fecha_checkout AS 'CHECK-OUT'))
+-- Paso 3: Agrupar por el tipo de movimiento y por el mes calendario (YYYY-MM).
+ GROUP BY tipo_movimiento, TO_CHAR(fecha_exacta, 'YYYY-MM')
+-- Paso 4: Ordenar cronologicamente por mes y tipo de movimiento.
+ ORDER BY mes, tipo_movimiento;
 -- =====================================================================
 -- CONSULTA 7 (LIBRE). BRECHA ENTRE ESTRELLAS AUTOASIGNADAS Y RESENAS
 -- Pregunta de negocio: que alojamientos se autoasignan mas estrellas de las
@@ -272,6 +294,8 @@ UNPIVOT (tarifa_promedio FOR temporada IN (alta AS 'ALTA', media AS 'MEDIA', baj
 -- Solo alojamientos con al menos 10 resenas (promedios confiables). RANK
 -- ordena la brecha dentro de cada tipo de alojamiento.
 -- =====================================================================
+-- Paso 1: Seleccionar datos del alojamiento y calcular calificacion promedio, brecha y diagnostico.
+-- Paso 2: Usar RANK() para ordenar por mayor brecha dentro de cada tipo de alojamiento.
 SELECT a.nombre_comercial AS alojamiento,
        mu.nombre AS municipio,
        ta.nombre AS tipo_alojamiento,
@@ -290,5 +314,6 @@ SELECT a.nombre_comercial AS alojamiento,
   JOIN municipio mu        ON mu.id_municipio = a.id_municipio
   JOIN tipo_alojamiento ta ON ta.id_tipo = a.id_tipo
  GROUP BY a.id_alojamiento, a.nombre_comercial, mu.nombre, ta.nombre, a.estrellas
+-- Paso 3: Filtrar solo alojamientos con al menos 10 resenas para garantizar datos representativos.
 HAVING COUNT(re.id_resena) >= 10
  ORDER BY brecha DESC, alojamiento;
