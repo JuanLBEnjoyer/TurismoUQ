@@ -1,5 +1,3 @@
-
-
 -- =====================================================================
 -- 1. CREACIÓN DEL TABLESPACE PARA HISTÓRICO DE RESERVAS
 -- =====================================================================
@@ -40,10 +38,44 @@ TABLESPACE ts_historico_reservas;
 
 COMMENT ON TABLE reserva_historico IS 'Repositorio historico de reservas finalizadas o canceladas, aislado en tablespace propio.';
 
+-- =====================================================================
+-- 3. PROCEDIMIENTO DE MIGRACIÓN HISTÓRICA
+-- Mueve las reservas antiguas cerradas al tablespace histórico y limpia
+-- el esquema transaccional para evitar fragmentación.
+-- =====================================================================
+CREATE OR REPLACE PROCEDURE sp_migrar_historico (p_meses_antiguedad IN NUMBER) IS
+    v_fecha_corte DATE := ADD_MONTHS(SYSDATE, -p_meses_antiguedad);
+BEGIN
+    -- 3.1 Insertar en el histórico sumando los pagos exitosos/reembolsados reales
+    INSERT INTO reserva_historico (
+        id_reserva, id_cliente, id_alojamiento, fecha_creacion, 
+        fecha_checkin, fecha_checkout, estado, fecha_cancelacion, valor_total
+    )
+    SELECT r.id_reserva, r.id_cliente, r.id_alojamiento, r.fecha_creacion,
+           r.fecha_checkin, r.fecha_checkout, r.estado, r.fecha_cancelacion,
+           NVL((SELECT SUM(monto) FROM pago p WHERE p.id_reserva = r.id_reserva AND p.estado IN ('EXITOSO', 'REEMBOLSADO')), 0)
+      FROM reserva r
+     WHERE r.estado IN ('COMPLETADA', 'CANCELADA')
+       AND r.fecha_checkout < v_fecha_corte;
 
--- Pruebas
+    -- 3.2 Limpiar tablas transaccionales (OLTP) respetando integridad referencial
+    DELETE FROM resena WHERE id_reserva IN (SELECT id_reserva FROM reserva WHERE estado IN ('COMPLETADA', 'CANCELADA') AND fecha_checkout < v_fecha_corte);
+    DELETE FROM pago WHERE id_reserva IN (SELECT id_reserva FROM reserva WHERE estado IN ('COMPLETADA', 'CANCELADA') AND fecha_checkout < v_fecha_corte);
+    DELETE FROM reserva_servicio WHERE id_reserva IN (SELECT id_reserva FROM reserva WHERE estado IN ('COMPLETADA', 'CANCELADA') AND fecha_checkout < v_fecha_corte);
+    DELETE FROM reserva_habitacion WHERE id_reserva IN (SELECT id_reserva FROM reserva WHERE estado IN ('COMPLETADA', 'CANCELADA') AND fecha_checkout < v_fecha_corte);
+    
+    -- 3.3 Eliminar cabecera transaccional
+    DELETE FROM reserva WHERE estado IN ('COMPLETADA', 'CANCELADA') AND fecha_checkout < v_fecha_corte;
+    
+    COMMIT;
+END sp_migrar_historico;
+/
 
--- 1. Verificar la existencia, estado y tamaño del tablespace en el motor
+-- =====================================================================
+-- 4. PRUEBAS Y VERIFICACIÓN
+-- =====================================================================
+
+-- 4.1. Verificar la existencia, estado y tamaño del tablespace en el motor
 SELECT tablespace_name,
        status,
        extent_management,
@@ -52,7 +84,7 @@ SELECT tablespace_name,
   FROM user_tablespaces
  WHERE tablespace_name = 'TS_HISTORICO_RESERVAS';
 
--- 2. Confirmar la ruta y configuración del Datafile asociado
+-- 4.2. Confirmar la ruta y configuración del Datafile asociado
 SELECT tablespace_name,
        file_name,
        bytes / 1024 / 1024 AS tamano_mb,
@@ -61,7 +93,7 @@ SELECT tablespace_name,
   FROM dba_data_files
  WHERE tablespace_name = 'TS_HISTORICO_RESERVAS';
 
--- 3. Confirmar que la tabla 'RESERVA_HISTORICO' reside en el nuevo tablespace
+-- 4.3. Confirmar que la tabla 'RESERVA_HISTORICO' reside en el nuevo tablespace
 SELECT table_name,
        tablespace_name,
        status,
@@ -69,36 +101,20 @@ SELECT table_name,
   FROM user_tables
  WHERE table_name = 'RESERVA_HISTORICO';
 
--- 4. Prueba de inserción simulando la migración de una reserva histórica
-INSERT INTO reserva_historico (
-    id_reserva,
-    id_cliente,
-    id_alojamiento,
-    fecha_creacion,
-    fecha_checkin,
-    fecha_checkout,
-    estado,
-    fecha_cancelacion,
-    valor_total
-) VALUES (
-    1,
-    1,
-    1,
-    DATE '2024-01-15',
-    DATE '2024-02-01',
-    DATE '2024-02-05',
-    'COMPLETADA',
-    NULL,
-    850000.00
-);
+-- 4.4. Ejecutar el proceso de migración real
+BEGIN
+    sp_migrar_historico(12);
+    DBMS_OUTPUT.PUT_LINE('Migracion historica ejecutada correctamente.');
+END;
 
-COMMIT;
-
--- 5. Visualizar el registro almacenado en el tablespace dedicado
+-- 4.5. Visualizar el registro almacenado en el tablespace dedicado
 SELECT id_historico,
        id_reserva,
        estado,
        TO_CHAR(fecha_checkin, 'YYYY-MM-DD') AS checkin,
+       TO_CHAR(fecha_checkout, 'YYYY-MM-DD') AS checkout,
        valor_total,
        TO_CHAR(fecha_migracion, 'YYYY-MM-DD HH24:MI:SS') AS fecha_migracion
-  FROM reserva_historico;
+  FROM reserva_historico
+ ORDER BY id_historico
+ FETCH FIRST 15 ROWS ONLY;

@@ -48,23 +48,37 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
         p_fecha_in      IN DATE,
         p_fecha_out     IN DATE
     ) RETURN NUMBER IS
-        v_total NUMBER := 0;
+        v_total             NUMBER := 0;
+        v_noches_calculadas NUMBER := 0;
+        v_noches_reales     NUMBER := p_fecha_out - p_fecha_in;
     BEGIN
-        IF p_fecha_out <= p_fecha_in THEN
-            RETURN 0;
-        END IF;
+    -- 1. Validación de fechas invertidas o iguales
+    IF p_fecha_out <= p_fecha_in THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Error: La fecha de check-out debe ser posterior al check-in.');
+    END IF;
 
-        SELECT NVL(SUM(
-                   (LEAST(p_fecha_out, t.fecha_fin + 1) - GREATEST(p_fecha_in, t.fecha_inicio)) * tf.valor_noche
-               ), 0)
-          INTO v_total
-          FROM temporada t
-          JOIN tarifa tf ON tf.id_temporada = t.id_temporada
-         WHERE tf.id_habitacion = p_id_habitacion
-           AND t.fecha_inicio < p_fecha_out
-           AND t.fecha_fin >= p_fecha_in;
+    -- 2. Cálculo del valor y conteo de noches facturadas por tramos
+    SELECT NVL(SUM(
+               (LEAST(p_fecha_out, t.fecha_fin + 1) - GREATEST(p_fecha_in, t.fecha_inicio)) * tf.valor_noche
+           ), 0),
+           NVL(SUM(
+               LEAST(p_fecha_out, t.fecha_fin + 1) - GREATEST(p_fecha_in, t.fecha_inicio)
+           ), 0)
+      INTO v_total, v_noches_calculadas
+      FROM temporada t
+      JOIN tarifa tf ON tf.id_temporada = t.id_temporada
+     WHERE tf.id_habitacion = p_id_habitacion
+       AND t.fecha_inicio < p_fecha_out
+       AND t.fecha_fin >= p_fecha_in;
 
-        RETURN v_total;
+    -- 3. Control de huecos y solapamientos en la configuración de temporadas/tarifas
+    IF v_noches_calculadas < v_noches_reales THEN
+        RAISE_APPLICATION_ERROR(-20007, 'Error: Existen noches sin tarifa o temporada configurada para este rango.');
+    ELSIF v_noches_calculadas > v_noches_reales THEN
+        RAISE_APPLICATION_ERROR(-20008, 'Error: Solapamiento detectado en las temporadas. Se están cobrando noches dobles.');
+    END IF;
+
+    RETURN v_total;
     END fn_valor_estadia;
 
     -- =================================================================
@@ -78,82 +92,58 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
         p_num_huespedes   IN  NUMBER,
         p_id_reserva      OUT NUMBER
     ) IS
+        v_existe_cliente  NUMBER;
         v_id_alojamiento  habitacion.id_alojamiento%TYPE;
         v_capacidad_max   habitacion.capacidad_max%TYPE;
         v_solapamientos   NUMBER := 0;
     BEGIN
-        -- Validación 1: Fechas invertidas o iguales
+        -- 1. Validación de fechas
         IF p_fecha_checkout <= p_fecha_checkin THEN
-            RAISE_APPLICATION_ERROR(-20001, 'Error: La fecha de check-out (' || 
-                TO_CHAR(p_fecha_checkout, 'YYYY-MM-DD') || 
-                ') debe ser estrictamente posterior al check-in (' || 
-                TO_CHAR(p_fecha_checkin, 'YYYY-MM-DD') || ').');
+            RAISE_APPLICATION_ERROR(-20001, 'Error: La fecha de check-out debe ser posterior al check-in.');
         END IF;
 
-        -- Validación 2: Existencia y capacidad de habitación
-        BEGIN
-            SELECT id_alojamiento, capacidad_max
-              INTO v_id_alojamiento, v_capacidad_max
-              FROM habitacion
-             WHERE id_habitacion = p_id_habitacion;
-        EXCEPTION
-            WHEN NO_DATA_FOUND THEN
-                RAISE_APPLICATION_ERROR(-20004, 'Error: La habitacion con ID ' || p_id_habitacion || ' no existe.');
-        END;
+        -- 2. Validación de existencia del cliente
+        SELECT COUNT(*) INTO v_existe_cliente FROM cliente WHERE id_cliente = p_id_cliente;
+    IF v_existe_cliente = 0 THEN
+        RAISE_APPLICATION_ERROR(-20009, 'Error: El cliente con ID ' || p_id_cliente || ' no existe.');
+    END IF;
 
-        IF p_num_huespedes > v_capacidad_max THEN
-            RAISE_APPLICATION_ERROR(-20002, 'Error: Capacidad excedida. La habitacion soporta maximo ' || 
-                v_capacidad_max || ' huespedes y se solicitaron ' || p_num_huespedes || '.');
-        END IF;
+    -- 3. Validación de habitación y capacidad
+    BEGIN
+        SELECT id_alojamiento, capacidad_max
+          INTO v_id_alojamiento, v_capacidad_max
+          FROM habitacion
+         WHERE id_habitacion = p_id_habitacion;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20004, 'Error: La habitación con ID ' || p_id_habitacion || ' no existe.');
+    END;
 
-        -- Validación 3: Solapamiento de fechas con reservas activas
-        SELECT COUNT(*)
-          INTO v_solapamientos
-          FROM reserva_habitacion rh
-          JOIN reserva r ON r.id_reserva = rh.id_reserva
-         WHERE rh.id_habitacion = p_id_habitacion
-           AND r.estado IN ('CONFIRMADA', 'PENDIENTE', 'COMPLETADA')
-           AND rh.fecha_checkin  < p_fecha_checkout
-           AND rh.fecha_checkout > p_fecha_checkin;
+    IF p_num_huespedes > v_capacidad_max THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Error: Capacidad excedida. Soporta máximo ' || v_capacidad_max || ' huéspedes.');
+    END IF;
 
-        IF v_solapamientos > 0 THEN
-            RAISE_APPLICATION_ERROR(-20003, 'Error: Habitacion no disponible. Ya existe una reserva activa en ese rango de fechas.');
-        END IF;
+    -- 4. Validación de disponibilidad (solapamiento)
+    SELECT COUNT(*)
+      INTO v_solapamientos
+      FROM reserva_habitacion rh
+      JOIN reserva r ON r.id_reserva = rh.id_reserva
+     WHERE rh.id_habitacion = p_id_habitacion
+       AND r.estado IN ('CONFIRMADA', 'PENDIENTE', 'COMPLETADA')
+       AND rh.fecha_checkin  < p_fecha_checkout
+       AND rh.fecha_checkout > p_fecha_checkin;
 
-        -- Inserción de cabecera y detalle
-        INSERT INTO reserva (
-            id_cliente,
-            id_alojamiento,
-            fecha_creacion,
-            fecha_checkin,
-            fecha_checkout,
-            estado,
-            fecha_cancelacion
-        ) VALUES (
-            p_id_cliente,
-            v_id_alojamiento,
-            SYSDATE,
-            p_fecha_checkin,
-            p_fecha_checkout,
-            'PENDIENTE',
-            NULL
-        ) RETURNING id_reserva INTO p_id_reserva;
+    IF v_solapamientos > 0 THEN
+        RAISE_APPLICATION_ERROR(-20003, 'Error: Habitación no disponible en ese rango de fechas.');
+    END IF;
 
-        INSERT INTO reserva_habitacion (
-            id_reserva,
-            id_habitacion,
-            fecha_checkin,
-            fecha_checkout,
-            num_huespedes
-        ) VALUES (
-            p_id_reserva,
-            p_id_habitacion,
-            p_fecha_checkin,
-            p_fecha_checkout,
-            p_num_huespedes
-        );
+    -- 5. Inserción de cabecera y detalle
+    INSERT INTO reserva (id_cliente, id_alojamiento, fecha_creacion, fecha_checkin, fecha_checkout, estado, fecha_cancelacion) 
+    VALUES (p_id_cliente, v_id_alojamiento, SYSDATE, p_fecha_checkin, p_fecha_checkout, 'PENDIENTE', NULL) 
+    RETURNING id_reserva INTO p_id_reserva;
 
-        COMMIT;
+    INSERT INTO reserva_habitacion (id_reserva, id_habitacion, fecha_checkin, fecha_checkout, num_huespedes) 
+    VALUES (p_id_reserva, p_id_habitacion, p_fecha_checkin, p_fecha_checkout, p_num_huespedes);
     END sp_crear_reserva;
 
     -- =================================================================
