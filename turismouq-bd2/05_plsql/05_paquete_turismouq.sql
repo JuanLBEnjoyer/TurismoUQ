@@ -268,11 +268,11 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
                 RPAD(SUBSTR(v_reg.municipio, 1, 14), 16) ||
                 LPAD(TO_CHAR(v_reg.total_reservas), 6) ||
                 LPAD(TO_CHAR(v_reg.total_noches), 8) ||
-                LPAD(TO_CHAR(v_reg.total_hospedaje, '999,999,999'), 18) ||
-                LPAD(TO_CHAR(v_reg.total_servicios, '999,999,999'), 15) ||
-                LPAD(TO_CHAR(v_reg.total_bruto,     '999,999,999'), 18) ||
-                LPAD(TO_CHAR(v_comision,            '999,999,999'), 16) ||
-                LPAD(TO_CHAR(v_neto,                '999,999,999'), 18)
+                LPAD(TO_CHAR(v_reg.total_hospedaje, '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_reg.total_servicios, '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_reg.total_bruto,     '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_comision,            '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_neto,                '99G999G999G999'), 20)
             );
         END LOOP;
 
@@ -284,11 +284,11 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
                 RPAD('TOTALES (' || c_liquidacion%ROWCOUNT || ' ALOJAMIENTOS)', 53) ||
                 LPAD(TO_CHAR(v_gran_total_reservas), 6) ||
                 LPAD(TO_CHAR(v_gran_total_noches), 8) ||
-                LPAD(TO_CHAR(v_gran_total_hospedaje, '999,999,999'), 18) ||
-                LPAD(TO_CHAR(v_gran_total_servicios, '999,999,999'), 15) ||
-                LPAD(TO_CHAR(v_gran_total_bruto,     '999,999,999'), 18) ||
-                LPAD(TO_CHAR(v_gran_total_comision,  '999,999,999'), 16) ||
-                LPAD(TO_CHAR(v_gran_total_neto,      '999,999,999'), 18)
+                LPAD(TO_CHAR(v_gran_total_hospedaje, '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_gran_total_servicios, '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_gran_total_bruto,     '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_gran_total_comision,  '99G999G999G999'), 20) ||
+                LPAD(TO_CHAR(v_gran_total_neto,      '99G999G999G999'), 20)
             );
             DBMS_OUTPUT.PUT_LINE('================================================================================================================================');
         END IF;
