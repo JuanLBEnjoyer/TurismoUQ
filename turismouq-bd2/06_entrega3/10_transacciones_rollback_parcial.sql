@@ -260,6 +260,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
         p_estado_final    OUT VARCHAR2
     ) IS
         v_costo_total NUMBER;
+        v_mensaje     VARCHAR2(400);
     BEGIN
         p_id_pago := NULL;
 
@@ -331,9 +332,12 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
                 -- Consolidar la reserva en estado PENDIENTE de forma definitiva
                 COMMIT;
 
+                -- Capturar el mensaje de error en variable PL/SQL
+                v_mensaje := SUBSTR(SQLERRM, 1, 400);
+
                 -- Registrar en tabla de log transaccional autónomo
                 INSERT INTO log_transaccion_reserva (id_reserva, resultado, mensaje_error)
-                VALUES (p_id_reserva, 'PAGO_FALLIDO_REVERSADO', SUBSTR(SQLERRM, 1, 400));
+                VALUES (p_id_reserva, 'PAGO_FALLIDO_REVERSADO', v_mensaje);
                 COMMIT;
         END;
 
@@ -347,6 +351,8 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
         p_mes            IN NUMBER,
         p_id_alojamiento IN NUMBER DEFAULT NULL
     ) IS
+        v_comision NUMBER := c_pct_comision;
+
         CURSOR c_liquidaciones IS
             WITH hospedaje_res AS (
                 SELECT r.id_reserva,
@@ -378,28 +384,32 @@ CREATE OR REPLACE PACKAGE BODY pkg_turismouq IS
             )
             SELECT a.id_alojamiento,
                    a.nombre_comercial,
-                   COUNT(c.id_reserva)                          AS total_reservas,
-                   NVL(SUM(c.ingreso_bruto), 0)                 AS total_bruto,
-                   NVL(SUM(c.ingreso_bruto) * c_pct_comision, 0) AS comision_plataforma,
-                   NVL(SUM(c.ingreso_bruto) * (1 - c_pct_comision), 0) AS neto_alojamiento
+                   COUNT(c.id_reserva)          AS total_reservas,
+                   NVL(SUM(c.ingreso_bruto), 0) AS total_bruto
               FROM alojamiento a
               LEFT JOIN consolidado_res c ON c.id_alojamiento = a.id_alojamiento
              WHERE (p_id_alojamiento IS NULL OR a.id_alojamiento = p_id_alojamiento)
              GROUP BY a.id_alojamiento, a.nombre_comercial
              ORDER BY total_bruto DESC;
 
-        r_liq c_liquidaciones%ROWTYPE;
+        r_liq                  c_liquidaciones%ROWTYPE;
+        v_comision_plataforma  NUMBER;
+        v_neto_alojamiento     NUMBER;
     BEGIN
         OPEN c_liquidaciones;
         LOOP
             FETCH c_liquidaciones INTO r_liq;
             EXIT WHEN c_liquidaciones%NOTFOUND;
+
+            v_comision_plataforma := NVL(r_liq.total_bruto, 0) * v_comision;
+            v_neto_alojamiento    := NVL(r_liq.total_bruto, 0) * (1 - v_comision);
+
             DBMS_OUTPUT.PUT_LINE(
                 'Alojamiento [' || RPAD(r_liq.id_alojamiento, 3) || '] ' ||
                 RPAD(SUBSTR(r_liq.nombre_comercial, 1, 25), 25) || ' | ' ||
                 'Reservas: ' || LPAD(r_liq.total_reservas, 4) || ' | ' ||
                 'Bruto: $' || LPAD(TO_CHAR(r_liq.total_bruto, '999,999,999'), 12) || ' | ' ||
-                'Neto: $'  || LPAD(TO_CHAR(r_liq.neto_alojamiento, '999,999,999'), 12)
+                'Neto: $'  || LPAD(TO_CHAR(v_neto_alojamiento, '999,999,999'), 12)
             );
         END LOOP;
         CLOSE c_liquidaciones;

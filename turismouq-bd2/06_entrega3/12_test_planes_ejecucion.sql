@@ -71,7 +71,33 @@ SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'DESPUES_FUNCIONAL', 'TYPIC
 
 
 PROMPT =====================================================================
-PROMPT CASO 3 (15%): ESCENARIO DONDE EL ÍNDICE NO AYUDA Y ES IGNORADO POR EL CBO
+PROMPT CASO 3: ÍNDICE COMPUESTO SOBRE RESERVA(id_alojamiento, estado)
+PROMPT Consulta de reportes por alojamiento y estado
+PROMPT =====================================================================
+
+-- 3.A. PLAN ANTES (Simulado deshabilitando el índice)
+EXPLAIN PLAN SET STATEMENT_ID = 'Q3_ANTES' FOR
+SELECT /*+ NO_INDEX(r idx_reserva_aloj_estado) */ 
+       id_reserva, fecha_checkin, estado
+  FROM reserva r
+ WHERE id_alojamiento = 1 
+   AND estado = 'PENDIENTE';
+
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'Q3_ANTES', 'TYPICAL'));
+
+-- 3.B. PLAN DESPUÉS (Usando el índice compuesto)
+EXPLAIN PLAN SET STATEMENT_ID = 'Q3_DESPUES' FOR
+SELECT /*+ INDEX(r idx_reserva_aloj_estado) */ 
+       id_reserva, fecha_checkin, estado
+  FROM reserva r
+ WHERE id_alojamiento = 1 
+   AND estado = 'PENDIENTE';
+
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', 'Q3_DESPUES', 'TYPICAL'));
+
+
+PROMPT =====================================================================
+PROMPT CASO 4 (15%): ESCENARIO DONDE EL ÍNDICE NO AYUDA Y ES IGNORADO POR EL CBO
 PROMPT =====================================================================
 
 PROMPT ---------------------------------------------------------------------
